@@ -60,7 +60,10 @@ typedef enum {
 	Pmap,		/* memory map */
 	Ptype,		/* executable type */
 	Pcmdline,	/* command line */
-	Prlimit		/* resource limits */
+	Prlimit,	/* resource limits */
+	Plwp,		/* PROC/lwp */
+	Plwp_certain,	/* PROC/lwp/LWP */
+	Plwp_regs	/* PROC/lwp/LWP/regs */
 } pfstype;
 
 /*

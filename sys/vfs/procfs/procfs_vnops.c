@@ -119,18 +119,20 @@ struct vop_ops procfs_vnode_vops = {
  * process-specific sub-directories.  It is
  * used in procfs_lookup and procfs_readdir
  */
-static struct proc_target {
+struct proc_target {
 	u_char	pt_type;
 	u_char	pt_namlen;
 	char	*pt_name;
 	pfstype	pt_pfstype;
 	int	(*pt_valid) (struct lwp *p);
-} proc_targets[] = {
+};
+
+struct proc_target proc_targets[] = {
 #define N(s) sizeof(s)-1, s
 	/*	  name		type		validp */
 	{ DT_DIR, N("."),	Pproc,		NULL },
 	{ DT_DIR, N(".."),	Proot,		NULL },
-	{ DT_REG, N("mem"),	Pmem,		NULL },
+	{ DT_REG, N("memXXX"),	Pmem,		NULL },
 	{ DT_REG, N("regs"),	Pregs,		procfs_validregs },
 	{ DT_REG, N("fpregs"),	Pfpregs,	procfs_validfpregs },
 	{ DT_REG, N("dbregs"),	Pdbregs,	procfs_validdbregs },
@@ -143,9 +145,19 @@ static struct proc_target {
 	{ DT_REG, N("cmdline"),	Pcmdline,	NULL },
 	{ DT_REG, N("rlimit"),	Prlimit,	NULL },
 	{ DT_LNK, N("file"),	Pfile,		NULL },
+	{ DT_DIR, N("lwp"),	Plwp,		NULL },
 #undef N
 };
 static const int nproc_targets = NELEM(proc_targets);
+
+static struct proc_target lwp_targets[] = {
+#define N(s) sizeof(s)-1, s
+	{ DT_REG, N("regs"), Plwp_regs, 0 }
+#undef N
+};
+
+static const int nlwp_targets = NELEM(lwp_targets);
+
 
 static pid_t atopid (const char *, u_int);
 
@@ -166,6 +178,7 @@ static pid_t atopid (const char *, u_int);
 static int
 procfs_open(struct vop_open_args *ap)
 {
+	kprintf("open\n");
 	struct pfsnode *pfs = VTOPFS(ap->a_vp);
 	struct proc *p1, *p2;
 	int error;
@@ -224,6 +237,7 @@ done:
 static int
 procfs_close(struct vop_close_args *ap)
 {
+	kprintf("close\n");
 	struct pfsnode *pfs = VTOPFS(ap->a_vp);
 	struct proc *p;
 
@@ -516,6 +530,7 @@ procfs_badop(struct vop_generic_args *ap)
 static int
 procfs_getattr(struct vop_getattr_args *ap)
 {
+	kprintf("getattr\n");
 	struct pfsnode *pfs = VTOPFS(ap->a_vp);
 	struct vattr *vap = ap->a_vap;
 	struct proc *procp;
@@ -564,6 +579,9 @@ procfs_getattr(struct vop_getattr_args *ap)
 	nanotime(&vap->va_ctime);
 	vap->va_atime = vap->va_mtime = vap->va_ctime;
 
+
+	kprintf("wtf type=%d\n", pfs->pfs_type);
+
 	/*
 	 * If the process has exercised some setuid or setgid
 	 * privilege, then rip away read/write permission so
@@ -608,6 +626,7 @@ procfs_getattr(struct vop_getattr_args *ap)
 
 	switch (pfs->pfs_type) {
 	case Proot:
+	case Plwp:
 		/*
 		 * Set nlink to 1 to tell fts(3) we don't actually know.
 		 */
@@ -630,6 +649,11 @@ procfs_getattr(struct vop_getattr_args *ap)
 
 	case Pproc:
 		vap->va_nlink = nproc_targets;
+		vap->va_size = vap->va_bytes = DEV_BSIZE;
+		break;
+
+	case Plwp_certain:
+		vap->va_nlink = nlwp_targets;
 		vap->va_size = vap->va_bytes = DEV_BSIZE;
 		break;
 
@@ -674,6 +698,10 @@ procfs_getattr(struct vop_getattr_args *ap)
 
 	case Pregs:
 		vap->va_bytes = vap->va_size = sizeof(struct reg);
+		break;
+
+	case Plwp_regs:
+		vap->va_bytes = vap->va_size = 0;
 		break;
 
 	case Pfpregs:
@@ -732,6 +760,7 @@ procfs_setattr(struct vop_setattr_args *ap)
 static int
 procfs_access(struct vop_access_args *ap)
 {
+	kprintf("access\n");
 	struct vattr vattr;
 	int error;
 
@@ -752,6 +781,7 @@ procfs_access(struct vop_access_args *ap)
 static int
 procfs_lookup(struct vop_old_lookup_args *ap)
 {
+
 	struct componentname *cnp = ap->a_cnp;
 	struct vnode **vpp = ap->a_vpp;
 	struct vnode *dvp = ap->a_dvp;
@@ -764,6 +794,8 @@ procfs_lookup(struct vop_old_lookup_args *ap)
 	struct lwp *lp;
 	int i;
 	int error;
+
+	kprintf("lookup %s\n", pname);
 
 	*vpp = NULL;
 
@@ -838,6 +870,38 @@ procfs_lookup(struct vop_old_lookup_args *ap)
 					pt->pt_pfstype);
 		goto out;
 
+	case Plwp: {
+		kprintf("Plwp: /lwp/%s\n", pname);
+
+		char *nametail;
+		lwpid_t tid = strtol(pname, &nametail, 10);
+		if (*nametail != '\0')
+			break;
+
+		kprintf("Plwp: tid=%d\n", tid);
+
+		p = pfs_pfind(pfs->pfs_pid);
+		if (p == NULL)
+			break;
+
+		spin_lock(&p->p_spin);
+		FOREACH_LWP_IN_PROC(lp, p) {
+			kprintf ("LWP %d\n", lp->lwp_tid);
+			if (lp->lwp_tid == tid) {
+				goto found_lwp;
+			}
+		}
+		spin_unlock(&p->p_spin);
+		break;
+	found_lwp:
+		spin_unlock(&p->p_spin);
+		kprintf("Plwp: found\n");
+
+		error = procfs_allocvp(dvp->v_mount, vpp, pfs->pfs_pid,
+				       Plwp_certain);
+		goto out;
+	}
+
 	default:
 		error = ENOTDIR;
 		goto out;
@@ -884,6 +948,8 @@ procfs_validfile(struct lwp *lp)
 static int
 procfs_readdir(struct vop_readdir_args *ap)
 {
+	kprintf("readdir\n");
+
 	struct pfsnode *pfs;
 	int error;
 
@@ -923,6 +989,8 @@ procfs_readdir(struct vop_readdir_args *ap)
 static int
 procfs_readdir_proc(struct vop_readdir_args *ap)
 {
+	kprintf("readdir_proc\n");
+
 	struct pfsnode *pfs;
 	int error, i, retval;
 	struct proc *p;
@@ -980,6 +1048,7 @@ static int procfs_readdir_root_callback(struct proc *p, void *data);
 static int
 procfs_readdir_root(struct vop_readdir_args *ap)
 {
+	kprintf("readdir_root\n");
 	struct procfs_readdir_root_info info;
 	struct uio *uio = ap->a_uio;
 	int res;
@@ -1009,6 +1078,7 @@ procfs_readdir_root(struct vop_readdir_args *ap)
 static int
 procfs_readdir_root_callback(struct proc *p, void *data)
 {
+	kprintf("readdir_root_callback\n");
 	struct procfs_readdir_root_info *info = data;
 	struct uio *uio;
 	int retval;

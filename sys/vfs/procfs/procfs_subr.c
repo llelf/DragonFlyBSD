@@ -77,8 +77,11 @@ static int pfsvplock;
  * had gotten onto the free list.
  */
 int
-procfs_allocvp(struct mount *mp, struct vnode **vpp, long pid, pfstype pfs_type)
+procfs_allocvp(struct mount *mp, struct vnode **vpp,
+	       long pid, /* lwpid_t tid, */ pfstype pfs_type)
 {
+	kprintf("allocvp pid=%ld\n", pid);
+
 	struct pfsnode *pfs;
 	struct vnode *vp;
 	struct pfsnode **pp;
@@ -175,6 +178,8 @@ loop:
 		break;
 
 	case Pproc:
+	case Plwp:
+	case Plwp_certain:
 		pfs->pfs_mode = (VREAD|VEXEC) |
 				(VREAD|VEXEC) >> 3 |
 				(VREAD|VEXEC) >> 6;
@@ -265,6 +270,7 @@ procfs_freevp(struct vnode *vp)
 struct proc *
 pfs_pfind(pid_t pfs_pid)
 {
+	kprintf("pfs_pfind(%d)\n", pfs_pid);
 	struct proc *p = NULL;
 
 	if (pfs_pid == 0) {
